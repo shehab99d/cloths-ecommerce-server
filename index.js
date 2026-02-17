@@ -1,11 +1,8 @@
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const express = require("express");
 const cors = require("cors");
-const multer = require("multer");
-// const bcrypt = require("bcryptjs");
 require("dotenv").config();
 const jwt = require("jsonwebtoken");
-
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -13,40 +10,6 @@ const port = process.env.PORT || 5000;
 /* ================= Middleware ================= */
 app.use(cors());
 app.use(express.json());
-app.use("/uploads", express.static("uploads"));
-
-const verifyJWT = (req, res, next) => {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader) {
-        return res.status(401).send({ message: "Unauthorized access" });
-    }
-
-    const token = authHeader.split(" ")[1];
-
-    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-        if (err) {
-            return res.status(403).send({ message: "Forbidden access" });
-        }
-
-        req.decoded = decoded;
-        next();
-    });
-};
-
-const verifyAdmin = async (req, res, next) => {
-    const email = req.decoded.email;
-
-    const user = await userCollection.findOne({ email });
-
-    if (!user || user.role !== "admin") {
-        return res.status(403).send({ message: "Admin only access" });
-    }
-
-    next();
-};
-
-
 
 /* ================= MongoDB ================= */
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.8bthues.mongodb.net/?appName=Cluster0`;
@@ -59,14 +22,6 @@ const client = new MongoClient(uri, {
     },
 });
 
-/* ================= Multer ================= */
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, "uploads/"),
-    filename: (req, file, cb) =>
-        cb(null, Date.now() + "-" + file.originalname),
-});
-const upload = multer({ storage });
-
 /* ================= Main Run ================= */
 async function run() {
     try {
@@ -74,13 +29,23 @@ async function run() {
         console.log("✅ MongoDB Connected");
 
         const db = client.db("fashionDB");
-        const productCollection = db.collection("products");
-        const userCollection = client.db("fashionDB").collection("users");
-
-
+        const userCollection = db.collection("users");
 
         /* =========================================
-           JSON web token
+           Attach collections to app locals so
+           routers and middlewares can access them
+        ========================================= */
+        app.locals.productCollection = db.collection("products");
+        app.locals.userCollection = userCollection;
+
+        /* =========================================
+           Mount product routes AFTER DB is ready
+        ========================================= */
+        const productRoutes = require("./products/Products");
+        app.use("/products", productRoutes);
+
+        /* =========================================
+           JSON Web Token
         ========================================= */
         app.post("/jwt", async (req, res) => {
             const { email } = req.body;
@@ -104,52 +69,11 @@ async function run() {
             res.send({ token });
         });
 
-
-
-
-        /* =========================================
-           CREATE → Add Product
-        ========================================= */
-        app.post(
-            "/products",
-            verifyJWT,
-            verifyAdmin,
-            upload.fields([
-                { name: "image1", maxCount: 1 },
-                { name: "image2", maxCount: 1 },
-            ]),
-            async (req, res) => {
-                try {
-                    const { title, price, size, description } = req.body;
-
-                    const product = {
-                        title,
-                        price: Number(price),
-                        description,
-                        size: JSON.parse(size),
-                        image1: req.files?.image1
-                            ? `${req.protocol}://${req.get("host")}/uploads/${req.files.image1[0].filename}`
-                            : "",
-                        image2: req.files?.image2
-                            ? `${req.protocol}://${req.get("host")}/uploads/${req.files.image2[0].filename}`
-                            : "",
-                        createdAt: new Date(),
-                    };
-
-                    const result = await productCollection.insertOne(product);
-                    res.send({ success: true, result });
-                } catch (error) {
-                    res.status(500).send({ success: false, error: error.message });
-                }
-            }
-        );
-
-
-
         /* =========================================
            READ → All Products
         ========================================= */
         app.get("/products", async (req, res) => {
+            const productCollection = req.app.locals.productCollection;
             const result = await productCollection
                 .find()
                 .sort({ createdAt: -1 })
@@ -162,6 +86,7 @@ async function run() {
         ========================================= */
         app.get("/products/:id", async (req, res) => {
             try {
+                const productCollection = req.app.locals.productCollection;
                 const result = await productCollection.findOne({
                     _id: new ObjectId(req.params.id),
                 });
@@ -175,6 +100,7 @@ async function run() {
            UPDATE → Product
         ========================================= */
         app.put("/products/:id", async (req, res) => {
+            const productCollection = req.app.locals.productCollection;
             const id = req.params.id;
             const { title, price, description, size } = req.body;
 
@@ -182,7 +108,7 @@ async function run() {
                 $set: {
                     title,
                     price: Number(price),
-                    description, // ✅ NEW
+                    description,
                     size,
                 },
             };
@@ -195,12 +121,12 @@ async function run() {
             res.send(result);
         });
 
-
         /* =========================================
            DELETE → Product
         ========================================= */
         app.delete("/products/:id", async (req, res) => {
             try {
+                const productCollection = req.app.locals.productCollection;
                 const result = await productCollection.deleteOne({
                     _id: new ObjectId(req.params.id),
                 });
@@ -210,20 +136,21 @@ async function run() {
             }
         });
 
-
-        // USER DATA 
+        /* =========================================
+           USER REGISTRATION
+        ========================================= */
         app.post("/register", async (req, res) => {
             const { firstName, lastName, email, mobile } = req.body;
 
             try {
                 const existingUser = await userCollection.findOne({
-                    $or: [{ email }, { mobile }]
+                    $or: [{ email }, { mobile }],
                 });
 
                 if (existingUser) {
                     return res.send({
                         success: false,
-                        message: "User already registered"
+                        message: "User already registered",
                     });
                 }
 
@@ -232,25 +159,25 @@ async function run() {
                     lastName,
                     email,
                     mobile,
-                    role: "user",          // ✅ Initial role
-                    createdAt: new Date()
+                    role: "user",
+                    createdAt: new Date(),
                 };
 
-                const result = await userCollection.insertOne(newUser);
+                await userCollection.insertOne(newUser);
 
                 res.send({
                     success: true,
                     message: "User registered successfully",
-                    user: newUser
+                    user: newUser,
                 });
             } catch (error) {
                 res.status(500).send({ success: false, error: error.message });
             }
         });
 
-
-
-
+        /* =========================================
+           GET → All Users
+        ========================================= */
         app.get("/users", async (req, res) => {
             try {
                 const users = await userCollection
@@ -264,6 +191,9 @@ async function run() {
             }
         });
 
+        /* =========================================
+           PATCH → Make Admin
+        ========================================= */
         app.patch("/users/admin/:id", async (req, res) => {
             const id = req.params.id;
 
@@ -275,6 +205,9 @@ async function run() {
             res.send(result);
         });
 
+        /* =========================================
+           PATCH → Remove Admin
+        ========================================= */
         app.patch("/users/remove-admin/:id", async (req, res) => {
             const id = req.params.id;
 
@@ -286,6 +219,9 @@ async function run() {
             res.send(result);
         });
 
+        /* =========================================
+           DELETE → User
+        ========================================= */
         app.delete("/users/:id", async (req, res) => {
             const id = req.params.id;
 
@@ -296,7 +232,9 @@ async function run() {
             res.send(result);
         });
 
-
+        /* =========================================
+           Google Login / Register
+        ========================================= */
         app.post("/google-login", async (req, res) => {
             const { displayName, email, photoURL } = req.body;
 
@@ -306,7 +244,7 @@ async function run() {
                     return res.send({
                         success: true,
                         message: "User already exists",
-                        user: existingUser
+                        user: existingUser,
                     });
                 }
 
@@ -314,21 +252,24 @@ async function run() {
                     name: displayName,
                     email,
                     photo: photoURL || "",
-                    role: "user",          // ✅ Initial role
-                    createdAt: new Date()
+                    role: "user",
+                    createdAt: new Date(),
                 };
 
-                const result = await userCollection.insertOne(newUser);
+                await userCollection.insertOne(newUser);
                 res.send({
                     success: true,
                     message: "User registered via Google",
-                    user: newUser
+                    user: newUser,
                 });
             } catch (error) {
                 res.status(500).send({ success: false, error: error.message });
             }
         });
 
+        /* =========================================
+           GET → User Role by Email
+        ========================================= */
         app.get("/users/role/:email", async (req, res) => {
             const email = req.params.email;
 
@@ -344,16 +285,11 @@ async function run() {
                 res.status(500).send({ error: error.message });
             }
         });
-
-
-
-
-
-
     } catch (error) {
         console.log("❌ Mongo Error:", error);
     }
 }
+
 run();
 
 /* ================= Test ================= */
@@ -362,6 +298,6 @@ app.get("/", (req, res) => {
 });
 
 /* ================= Start ================= */
-// app.listen(port, () => {
-//     console.log(`🔥 Server running on port ${port}`);
-// });
+app.listen(port, () => {
+    console.log(`🔥 Server running on port ${port}`);
+});
