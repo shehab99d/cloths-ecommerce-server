@@ -1,15 +1,30 @@
-const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const express = require("express");
 const cors = require("cors");
+// const jwt = require("jsonwebtoken");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
-const jwt = require("jsonwebtoken");
 
 const app = express();
 const port = process.env.PORT || 5000;
 
+
+if (!process.env.DB_USER || !process.env.DB_PASS) {
+    console.error("❌ Missing DB credentials");
+    process.exit(1);
+}
+
 /* ================= Middleware ================= */
-app.use(cors());
+app.use(cors({
+    origin: [
+        "https://e-commerce-client-2.web.app",
+        "http://localhost:5173"
+    ],
+    credentials: true
+}));
+
+
 app.use(express.json());
+
 
 /* ================= MongoDB ================= */
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.8bthues.mongodb.net/?appName=Cluster0`;
@@ -22,178 +37,109 @@ const client = new MongoClient(uri, {
     },
 });
 
-/* ================= Main Run ================= */
+/* ================= Main ================= */
+let userCollection;
+let productCollection;
+
 async function run() {
     try {
         await client.connect();
         console.log("✅ MongoDB Connected");
 
         const db = client.db("fashionDB");
-        const userCollection = db.collection("users");
+        userCollection = db.collection("users");
+        productCollection = db.collection("products");
 
-        /* =========================================
-           Attach collections to app locals so
-           routers and middlewares can access them
-        ========================================= */
-        app.locals.productCollection = db.collection("products");
-        app.locals.userCollection = userCollection;
+        /* ================= JWT ================= */
+        // app.post("/jwt", async (req, res) => {
+        //     const { email } = req.body;
 
-        /* =========================================
-           Mount product routes AFTER DB is ready
-        ========================================= */
-        const productRoutes = require("./products/Products");
-        app.use("/products", productRoutes);
+        //     if (!email) {
+        //         return res.status(400).send({ message: "Email required" });
+        //     }
 
-        /* =========================================
-           JSON Web Token
-        ========================================= */
-        app.post("/jwt", async (req, res) => {
-            const { email } = req.body;
+        //     const user = await userCollection.findOne({ email });
 
-            if (!email) {
-                return res.status(400).send({ message: "Email required" });
-            }
+        //     if (!user) {
+        //         return res.status(401).send({ message: "Unauthorized" });
+        //     }
 
-            const user = await userCollection.findOne({ email });
+        //     const token = jwt.sign(
+        //         { email: user.email },
+        //         process.env.JWT_SECRET,
+        //         { expiresIn: "7d" }
+        //     );
 
-            if (!user) {
-                return res.status(401).send({ message: "Unauthorized" });
-            }
+        //     res.send({ token });
+        // });
 
-            const token = jwt.sign(
-                { email: user.email },
-                process.env.JWT_SECRET,
-                { expiresIn: "7d" }
-            );
+        /* ================= USERS ================= */
 
-            res.send({ token });
-        });
-
-        /* =========================================
-           READ → All Products
-        ========================================= */
-        app.get("/products", async (req, res) => {
-            const productCollection = req.app.locals.productCollection;
-            const result = await productCollection
-                .find()
-                .sort({ createdAt: -1 })
-                .toArray();
-            res.send(result);
-        });
-
-        /* =========================================
-           READ → Single Product
-        ========================================= */
-        app.get("/products/:id", async (req, res) => {
-            try {
-                const productCollection = req.app.locals.productCollection;
-                const result = await productCollection.findOne({
-                    _id: new ObjectId(req.params.id),
-                });
-                res.send(result);
-            } catch {
-                res.status(400).send({ error: "Invalid ID" });
-            }
-        });
-
-        /* =========================================
-           UPDATE → Product
-        ========================================= */
-        app.put("/products/:id", async (req, res) => {
-            const productCollection = req.app.locals.productCollection;
-            const id = req.params.id;
-            const { title, price, description, size } = req.body;
-
-            const updateDoc = {
-                $set: {
-                    title,
-                    price: Number(price),
-                    description,
-                    size,
-                },
-            };
-
-            const result = await productCollection.updateOne(
-                { _id: new ObjectId(id) },
-                updateDoc
-            );
-
-            res.send(result);
-        });
-
-        /* =========================================
-           DELETE → Product
-        ========================================= */
-        app.delete("/products/:id", async (req, res) => {
-            try {
-                const productCollection = req.app.locals.productCollection;
-                const result = await productCollection.deleteOne({
-                    _id: new ObjectId(req.params.id),
-                });
-                res.send(result);
-            } catch {
-                res.status(400).send({ error: "Invalid ID" });
-            }
-        });
-
-        /* =========================================
-           USER REGISTRATION
-        ========================================= */
+        // Register
         app.post("/register", async (req, res) => {
             const { firstName, lastName, email, mobile } = req.body;
 
-            try {
-                const existingUser = await userCollection.findOne({
-                    $or: [{ email }, { mobile }],
+            const existingUser = await userCollection.findOne({
+                $or: [{ email }, { mobile }],
+            });
+
+            if (existingUser) {
+                return res.send({
+                    success: false,
+                    message: "User already registered",
                 });
-
-                if (existingUser) {
-                    return res.send({
-                        success: false,
-                        message: "User already registered",
-                    });
-                }
-
-                const newUser = {
-                    firstName,
-                    lastName,
-                    email,
-                    mobile,
-                    role: "user",
-                    createdAt: new Date(),
-                };
-
-                await userCollection.insertOne(newUser);
-
-                res.send({
-                    success: true,
-                    message: "User registered successfully",
-                    user: newUser,
-                });
-            } catch (error) {
-                res.status(500).send({ success: false, error: error.message });
             }
+
+            const newUser = {
+                firstName,
+                lastName,
+                email,
+                mobile,
+                role: "user",
+                createdAt: new Date(),
+            };
+
+            await userCollection.insertOne(newUser);
+
+            res.send({
+                success: true,
+                message: "User registered successfully",
+            });
         });
 
-        /* =========================================
-           GET → All Users
-        ========================================= */
+        // Google Login
+        app.post("/google-login", async (req, res) => {
+            const { displayName, email, photoURL } = req.body;
+
+            const existingUser = await userCollection.findOne({ email });
+
+            if (existingUser) {
+                return res.send({ success: true, user: existingUser });
+            }
+
+            const newUser = {
+                name: displayName,
+                email,
+                photo: photoURL || "",
+                role: "user",
+                createdAt: new Date(),
+            };
+
+            await userCollection.insertOne(newUser);
+            res.send({ success: true, user: newUser });
+        });
+
+        // Get all users (Admin)
         app.get("/users", async (req, res) => {
-            try {
-                const users = await userCollection
-                    .find()
-                    .sort({ createdAt: -1 })
-                    .toArray();
+            const users = await userCollection
+                .find()
+                .sort({ createdAt: -1 })
+                .toArray();
 
-                res.send({ success: true, users });
-            } catch (error) {
-                res.status(500).send({ success: false, message: error.message });
-            }
+            res.send(users);
         });
 
-        /* =========================================
-           PATCH → Make Admin
-        ========================================= */
+        // Make admin
         app.patch("/users/admin/:id", async (req, res) => {
             const id = req.params.id;
 
@@ -205,9 +151,7 @@ async function run() {
             res.send(result);
         });
 
-        /* =========================================
-           PATCH → Remove Admin
-        ========================================= */
+        // Remove admin
         app.patch("/users/remove-admin/:id", async (req, res) => {
             const id = req.params.id;
 
@@ -219,9 +163,7 @@ async function run() {
             res.send(result);
         });
 
-        /* =========================================
-           DELETE → User
-        ========================================= */
+        // Delete user
         app.delete("/users/:id", async (req, res) => {
             const id = req.params.id;
 
@@ -232,61 +174,150 @@ async function run() {
             res.send(result);
         });
 
-        /* =========================================
-           Google Login / Register
-        ========================================= */
-        app.post("/google-login", async (req, res) => {
-            const { displayName, email, photoURL } = req.body;
+        // Get role
+        app.get("/users/role/:email", async (req, res) => {
+            const email = req.params.email;
+            const user = await userCollection.findOne({ email });
 
+            res.send({ role: user?.role || "user" });
+        });
+
+        /* ================= PRODUCTS ================= */
+
+        // Create product (Admin)
+        app.post("/products", async (req, res) => {
             try {
-                const existingUser = await userCollection.findOne({ email });
-                if (existingUser) {
-                    return res.send({
-                        success: true,
-                        message: "User already exists",
-                        user: existingUser,
+                const {
+                    title,
+                    price,
+                    description,
+                    category,
+                    size,
+                    image1,
+                    image2,
+                } = req.body;
+
+                if (!title || !price || !category || !image1) {
+                    return res.status(400).send({
+                        success: false,
+                        message: "Missing required fields",
                     });
                 }
 
-                const newUser = {
-                    name: displayName,
-                    email,
-                    photo: photoURL || "",
-                    role: "user",
+                const product = {
+                    title,
+                    price: Number(price),
+                    description,
+                    category, // 🔥 important for sorting
+                    size: size || [],
+                    image1,
+                    image2: image2 || "",
                     createdAt: new Date(),
                 };
 
-                await userCollection.insertOne(newUser);
+                const result = await productCollection.insertOne(product);
+
                 res.send({
                     success: true,
-                    message: "User registered via Google",
-                    user: newUser,
+                    message: "Product added successfully",
+                    result,
                 });
             } catch (error) {
-                res.status(500).send({ success: false, error: error.message });
+                console.error(error);
+                res.status(500).send({
+                    success: false,
+                    message: "Server error",
+                });
             }
         });
 
-        /* =========================================
-           GET → User Role by Email
-        ========================================= */
-        app.get("/users/role/:email", async (req, res) => {
-            const email = req.params.email;
+        // Get all products
 
+
+        // Get single product
+        // GET all products, optional category filter
+        // GET all products, optional category filter
+        app.get("/products", async (req, res) => {
             try {
-                const user = await userCollection.findOne({ email });
+                const { category } = req.query;
 
-                if (!user) {
-                    return res.send({ role: "user" });
+                const categoryOrder = ["shirts", "pants", "accessories"]; // your preferred order
+
+                let query = {};
+                if (category) query.category = category;
+
+                const products = await productCollection
+                    .find(query)
+                    .sort({ createdAt: -1 })
+                    .toArray();
+
+                if (!category) {
+                    products.sort((a, b) => {
+                        const ai = categoryOrder.indexOf(a.category);
+                        const bi = categoryOrder.indexOf(b.category);
+                        // unknown categories go to the end
+                        const aIdx = ai === -1 ? 999 : ai;
+                        const bIdx = bi === -1 ? 999 : bi;
+                        return aIdx - bIdx;
+                    });
                 }
 
-                res.send({ role: user.role });
+                res.send(products);
             } catch (error) {
-                res.status(500).send({ error: error.message });
+                console.error(error);
+                res.status(500).send({ message: "Failed to get products" });
             }
         });
+
+        // GET single product by ID
+        app.get("/products/:id", async (req, res) => {
+            try {
+                const id = req.params.id;
+                const product = await productCollection.findOne({ _id: new ObjectId(id) });
+
+                if (!product) return res.status(404).send({ success: false, message: "Product not found" });
+
+                res.send(product);
+            } catch (error) {
+                console.error(error);
+                res.status(500).send({ success: false, message: "Failed to get product" });
+            }
+        });
+        // Update product (Admin)
+        app.put("/products/:id", async (req, res) => {
+            const id = req.params.id;
+            const { title, price, size, description, image1, image2 } = req.body;
+
+            const updateDoc = {
+                $set: {
+                    title,
+                    price: Number(price),
+                    size,
+                    description,
+                    image1,
+                    image2,
+                },
+            };
+
+            const result = await productCollection.updateOne(
+                { _id: new ObjectId(id) },
+                updateDoc
+            );
+
+            res.send(result);
+        });
+
+        // Delete product (Admin)
+        app.delete("/products/:id", async (req, res) => {
+            const result = await productCollection.deleteOne({
+                _id: new ObjectId(req.params.id),
+            });
+
+            res.send(result);
+        });
+
     } catch (error) {
-        console.log("❌ Mongo Error:", error);
+        console.log("❌ Server Error:", error);
     }
 }
 
@@ -299,5 +330,5 @@ app.get("/", (req, res) => {
 
 /* ================= Start ================= */
 app.listen(port, () => {
-    console.log(`🔥 Server running on port ${port}`);
+    console.log(`🚀 Server running on port ${port}`);
 });
