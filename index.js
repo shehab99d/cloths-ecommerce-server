@@ -4,12 +4,7 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 
 const app = express();
-const port = process.env.PORT || 5000;
 
-if (!process.env.DB_USER || !process.env.DB_PASS) {
-    console.error("❌ Missing DB credentials");
-    process.exit(1);
-}
 
 app.use(
     cors({
@@ -220,6 +215,5 @@ app.get("/", (req, res) => {
     res.send("🚀 Server is running perfectly");
 });
 
-app.listen(port, () => {
-    console.log(`🚀 Server running on port ${port}`);
-});
+
+module.exports = app;
